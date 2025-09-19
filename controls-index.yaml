@@ -5,4 +5,4 @@ metadata:
   description: "Critical security controls for pre-commit"
 spec:
   controls:
-    - C-0057
+    - non-root-containers
