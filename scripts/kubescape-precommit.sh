@@ -1,6 +1,16 @@
 #!/bin/bash
 set -e
 
+# Check for required tools
+if ! command -v kubescape >/dev/null 2>&1; then
+  echo "Error: kubescape CLI not found. Please install it and ensure it is on your PATH." >&2
+  exit 1
+fi
+if ! command -v jq >/dev/null 2>&1; then
+  echo "Error: jq not found. Please install jq and ensure it is on your PATH." >&2
+  exit 1
+fi
+
 # Only scan staged YAML files
 staged=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.ya?ml$' || true)
 
