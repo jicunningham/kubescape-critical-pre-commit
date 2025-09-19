@@ -1,5 +1,5 @@
 - id: kubescape-critical-check
   name: Kubescape Critical YAML Check
   entry: scripts/combinedScript.py
-  language: python
+  language: script
   files: \.(yaml|yml)$
