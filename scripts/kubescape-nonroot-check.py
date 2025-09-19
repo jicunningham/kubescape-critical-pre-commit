@@ -20,20 +20,31 @@ def run_kubescape(files):
         "kubescape",
         "scan",
         "framework",
-        "nsa",
+        "nsa",      # Built-in framework
         *files,
         "--format",
         "json",
+        "--output",
+        "stdout",
     ]
     try:
         completed = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if not completed.stdout.strip():
+            print("Kubescape produced no JSON output. Are your files valid YAML?")
+            return 1, "{}"
         return completed.returncode, completed.stdout
     except FileNotFoundError:
         print("Error: kubescape CLI not found. Install it and ensure it's on PATH.", file=sys.stderr)
         sys.exit(1)
 
 def check_critical_findings(json_output):
-    data = json.loads(json_output)
+    try:
+        data = json.loads(json_output)
+    except json.JSONDecodeError:
+        print("Error: Kubescape output is not valid JSON. Here's the raw output:")
+        print(json_output)
+        sys.exit(1)
+
     critical = [
         res
         for res in data.get("resources", [])
