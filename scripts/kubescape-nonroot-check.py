@@ -1,80 +1,59 @@
 #!/usr/bin/env python3
-import os
 import subprocess
 import sys
+import json
 
 def get_staged_yaml_files():
-    """Return a list of staged YAML files."""
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        files = [f.strip() for f in result.stdout.splitlines() if f.endswith((".yaml", ".yml"))]
-        return files
-    except subprocess.CalledProcessError:
-        return []
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
+        capture_output=True,
+        text=True,
+    )
+    return [f for f in result.stdout.splitlines() if f.endswith((".yaml", ".yml"))]
 
-def main():
-    staged_files = get_staged_yaml_files()
-    if not staged_files:
+def run_kubescape(files):
+    if not files:
         print("No staged YAML files to scan with Kubescape.")
-        sys.exit(0)
+        return 0, "{}"
 
-    # Kubescape controls path relative to this script
-    script_dir = os.path.dirname(os.path.realpath(__file__))
-    controls_index = os.path.join(script_dir, "../controls-index.yaml")
-
-    if not os.path.isfile(controls_index):
-        print(f"Error: controls-index.yaml not found at {controls_index}")
-        sys.exit(1)
-
-    # Run Kubescape
     cmd = [
         "kubescape",
         "scan",
-        "--controls-config",
-        controls_index,
+        "framework",
+        "nsa",
+        *files,
         "--format",
         "json",
-    ] + staged_files
-
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    except FileNotFoundError:
-        print("Error: kubescape CLI not found. Install and ensure it is on PATH.")
-        sys.exit(1)
-
-    if not result.stdout.strip():
-        print("Kubescape did not produce any output.")
-        sys.exit(1)
-
-    # Parse results
-    import json
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        print("Error: Kubescape output is not valid JSON:")
-        print(result.stdout)
-        sys.exit(1)
-
-    # Count critical findings
-    critical_findings = [
-        r for r in data.get("resources", [])
-        if any(res.get("severity") == "critical" for res in r.get("results", []))
     ]
+    try:
+        completed = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        return completed.returncode, completed.stdout
+    except FileNotFoundError:
+        print("Error: kubescape CLI not found. Install it and ensure it's on PATH.", file=sys.stderr)
+        sys.exit(1)
 
-    if critical_findings:
-        print(f"❌ Kubescape found {len(critical_findings)} critical issues in staged YAML files!")
-        for r in critical_findings:
-            for res in r.get("results", []):
-                if res.get("severity") == "critical":
-                    print(f"{r.get('name')}: {res.get('message')}")
+def check_critical_findings(json_output):
+    data = json.loads(json_output)
+    critical = [
+        res
+        for res in data.get("resources", [])
+        for r in res.get("results", [])
+        if r.get("severity") == "critical"
+    ]
+    return critical
+
+def main():
+    yaml_files = get_staged_yaml_files()
+    retcode, output = run_kubescape(yaml_files)
+    critical_issues = check_critical_findings(output)
+
+    if critical_issues:
+        print(f"❌ Kubescape found {len(critical_issues)} critical issues:")
+        for issue in critical_issues:
+            print(f"- {issue.get('message')} ({issue.get('resourceID')})")
         sys.exit(1)
     else:
-        print("✅ Kubescape check passed: no critical issues in staged YAML files.")
+        print("✅ Kubescape check passed: no critical issues.")
         sys.exit(0)
 
 if __name__ == "__main__":
