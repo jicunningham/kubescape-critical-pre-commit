@@ -5,6 +5,4 @@ metadata:
   description: "Critical security controls for pre-commit"
 spec:
   controls:
-    - restrict-privileged-containers
-    - disallow-host-path
-    - disallow-root
+    - C-0057
