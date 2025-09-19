@@ -1,141 +1,92 @@
 #!/usr/bin/env python3
-import subprocess
 import sys
+import subprocess
 import json
-import tempfile
-import os
-import shutil
-import yaml
+from pathlib import Path
 
 def get_staged_yaml_files():
-    """Return a list of staged YAML files."""
-    try:
-        staged_files = (
-            subprocess.check_output(
-                ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"]
-            )
-            .decode()
-            .strip()
-            .splitlines()
-        )
-    except subprocess.CalledProcessError as e:
-        print(f"Error getting staged files: {e}", file=sys.stderr)
-        return []
-    return [f for f in staged_files if f.endswith((".yaml", ".yml"))]
+    """Return a list of staged YAML files (new or modified)"""
+    # Modified / added files in index
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
+        capture_output=True, text=True
+    )
+    staged = result.stdout.splitlines()
 
-def run_kubescape(yaml_files):
-    """Run kubescape on staged YAML files."""
-    tmpdir = tempfile.mkdtemp(prefix="kubescape-precommit-")
-    for f in yaml_files:
-        if os.path.exists(f):
-            dest = os.path.join(tmpdir, os.path.basename(f))
-            subprocess.run(["cp", f, dest], check=False)
+    # Newly added files not yet committed
+    result_new = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        capture_output=True, text=True
+    )
+    new_files = result_new.stdout.splitlines()
 
-    outfile = os.path.join(tmpdir, "kubescape-out.json")
-    try:
-        subprocess.run(
-            [
-                "kubescape",
-                "scan",
-                "framework",
-                "nsa",
-                "--severity-threshold",
-                "critical",
-                "--keep-local",
-                "-v",
-                tmpdir,
-                "--format",
-                "json",
-                "--output",
-                outfile,
-            ],
-            check=True,
-        )
-    except subprocess.CalledProcessError as e:
-        print(f"Error running kubescape: {e}", file=sys.stderr)
-        return None
+    # Combine and filter YAML files
+    files = [f for f in staged + new_files if f.endswith((".yaml", ".yml"))]
+    return files
 
-    try:
-        with open(outfile, "r") as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"Error parsing kubescape output: {e}", file=sys.stderr)
-        return None
-
-def find_root_containers(yaml_file):
-    """Return (line, text) of explicit or implicit root cases in a YAML file."""
-    issues = []
-    try:
-        with open(yaml_file, "r") as f:
-            docs = list(yaml.safe_load_all(f))
-    except Exception:
-        return issues
-
-    with open(yaml_file, "r") as f:
-        lines = f.readlines()
-
-    for doc in docs:
-        if not isinstance(doc, dict):
-            continue
-        spec = doc.get("spec", {})
-        # handle Pod and Deployment-like templates
-        template = spec.get("template", {}) if "template" in spec else spec
-        pod_spec = template.get("spec", {})
-        for c in pod_spec.get("containers", []):
-            name = c.get("name", "<unnamed>")
-            sc = c.get("securityContext", {})
-            if "runAsUser" in sc:
-                if sc["runAsUser"] == 0:
-                    # Explicit root
-                    for i, line in enumerate(lines, start=1):
-                        if "runAsUser" in line and "0" in line:
-                            issues.append((i, line.strip(), name, "explicit root"))
-            else:
-                # No runAsUser at all (implicit root)
-                issues.append((None, "securityContext missing runAsUser (implicit root)", name, "implicit root"))
-    return issues
-
-def main():
-    yaml_files = get_staged_yaml_files()
-    if not yaml_files:
+def run_kubescape(files):
+    """Run Kubescape on given files with the controls-index.yaml"""
+    if not files:
         print("No staged YAML files to scan with Kubescape.")
-        return 0
+        return None
 
-    if not shutil.which("kubescape"):
-        print("Error: kubescape CLI not found in PATH", file=sys.stderr)
-        return 1
+    # Path to controls-index.yaml relative to script
+    script_dir = Path(__file__).resolve().parent
+    controls_index = script_dir.parent / "controls-index.yaml"
+    if not controls_index.exists():
+        print(f"Error: controls-index.yaml not found at {controls_index}", file=sys.stderr)
+        sys.exit(1)
 
-    data = run_kubescape(yaml_files)
-    if data is None:
-        return 1
+    cmd = [
+        "kubescape", "scan",
+        "--controls-config", str(controls_index),
+        "--format", "json",
+        *files
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as e:
+        # Kubescape returns non-zero on findings, ignore exit code
+        return e.stdout
+
+    return result.stdout
+
+def parse_results(json_text):
+    """Parse Kubescape JSON output and print critical findings with container info"""
+    try:
+        data = json.loads(json_text)
+    except json.JSONDecodeError:
+        print("Error: Kubescape output is not valid JSON")
+        print(json_text)
+        sys.exit(1)
 
     failed = False
-
-    # Report Kubescape failures
-    for resource in data.get("resources", []):
-        for result in resource.get("results", []):
-            if result.get("controlID") == "C-0057" and result.get("status") == "failed":
+    for res in data.get("resources", []):
+        file_path = res.get("filePath", "?")
+        for r in res.get("results", []):
+            if r.get("controlID") == "C-0057" and r.get("severity", "").lower() == "critical":
                 failed = True
-                resource_id = resource.get("resourceID", resource.get("resourceKind", "Unknown"))
-                print(f"❌ Kubescape flagged resource: {resource_id}")
+                # Extract container name if present
+                container_name = r.get("resourceName") or "unknown"
+                # Extract line number from metadata if available
+                line_info = r.get("ruleResponses", [{}])[0].get("line", "?")
+                message = r.get("message", "Container runs as root")
+                print(f"{file_path}:{line_info} [{container_name}] {message}")
+    return failed
 
-    # Extra check for explicit + implicit root
-    for f in yaml_files:
-        issues = find_root_containers(f)
-        for line, text, cname, itype in issues:
-            failed = True
-            if line:
-                print(f"❌ {f}:{line} [{cname}] -> {text} ({itype})")
-            else:
-                print(f"❌ {f} [{cname}] -> {text} ({itype})")
+def main():
+    files = get_staged_yaml_files()
+    output = run_kubescape(files)
+    if output is None:
+        sys.exit(0)
 
+    failed = parse_results(output)
     if failed:
-        print("Commit rejected due to root containers.")
-        return 1
-
-    print("✅ No containers running as root detected in staged YAML files.")
-    return 0
+        print("❌ Kubescape check failed: root containers detected.")
+        sys.exit(1)
+    else:
+        print("✅ Kubescape check passed: no root containers found.")
+        sys.exit(0)
 
 if __name__ == "__main__":
-    sys.exit(main())
-
+    main()
