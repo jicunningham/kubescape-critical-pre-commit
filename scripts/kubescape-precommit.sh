@@ -1,40 +1,64 @@
 #!/bin/bash
 set -e
 
-# Check for required tools
-if ! command -v kubescape >/dev/null 2>&1; then
-  echo "Error: kubescape CLI not found. Please install it and ensure it is on your PATH." >&2
-  exit 1
-fi
-if ! command -v jq >/dev/null 2>&1; then
-  echo "Error: jq not found. Please install jq and ensure it is on your PATH." >&2
-  exit 1
-fi
+# -----------------------------
+# Check required tools
+# -----------------------------
+for cmd in kubescape jq git; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "Error: $cmd not found. Please install it and ensure it is on your PATH." >&2
+    exit 1
+  fi
+done
 
+# -----------------------------
 # Only scan staged YAML files
+# -----------------------------
 staged=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.ya?ml$' || true)
-
 if [[ -z "$staged" ]]; then
   echo "No staged YAML files to scan with Kubescape."
   exit 0
 fi
 
-# Fetch the latest controls from your remote repo
-RULES_REPO_URL="https://github.com/jicunningham/kubescape-critical-pre-commit"
-RULES_LOCAL_DIR="/tmp/kubescape-critical-controls"
-rm -rf "$RULES_LOCAL_DIR"
-git clone --depth=1 "$RULES_REPO_URL" "$RULES_LOCAL_DIR"
+# -----------------------------
+# Use the repo's controls-index.yaml
+# -----------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONTROLS_INDEX="$SCRIPT_DIR/../controls-index.yaml"
 
-# Run Kubescape scan on staged YAML files with custom controls
-kubescape scan "$RULES_LOCAL_DIR/controls-index.yaml" --keep-local $staged --output json > /tmp/kubescape-out.json
+if [[ ! -f "$CONTROLS_INDEX" ]]; then
+  echo "Error: controls-index.yaml not found at $CONTROLS_INDEX" >&2
+  exit 1
+fi
 
-# Check for critical issues in the output
-critical_findings=$(jq '[ .resources[] | select(.results[]?.severity=="critical") ] | length' /tmp/kubescape-out.json)
+# -----------------------------
+# Run Kubescape scan
+# -----------------------------
+OUTFILE=$(mktemp)
+kubescape scan --controls-config "$CONTROLS_INDEX" $staged --format json --output "$OUTFILE" || true
+
+# -----------------------------
+# Validate JSON
+# -----------------------------
+if ! jq empty "$OUTFILE" >/dev/null 2>&1; then
+  echo "Error: Kubescape output is not valid JSON. Output below:"
+  cat "$OUTFILE"
+  rm "$OUTFILE"
+  exit 1
+fi
+
+# -----------------------------
+# Count critical findings
+# -----------------------------
+critical_findings=$(jq '[.resources[] | select(.results[]?.severity=="critical")] | length' "$OUTFILE")
 
 if [[ "$critical_findings" -gt 0 ]]; then
-  echo "Kubescape found critical security issues in staged YAML files! Commit rejected."
+  echo "❌ Kubescape found $critical_findings critical security issues in staged YAML files!"
+  jq -r '.resources[] | select(.results[]?.severity=="critical") | "\(.name): \(.results[]?.message)"' "$OUTFILE" || true
+  rm "$OUTFILE"
   exit 1
 else
-  echo "Kubescape check passed: no critical issues in staged YAML files."
+  echo "✅ Kubescape check passed: no critical issues in staged YAML files."
+  rm "$OUTFILE"
   exit 0
 fi
