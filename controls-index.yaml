@@ -7,3 +7,4 @@ spec:
   controls:
     - restrict-privileged-containers
     - disallow-host-path
+    - disallow-root
