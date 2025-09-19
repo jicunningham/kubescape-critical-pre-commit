@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Control
+metadata:
+  name: non-root-containers
+  description: "Containers must not run as root (runAsNonRoot: true required)"
+  severity: critical
+spec:
+  match:
+    resources:
+      kinds: ["Pod", "Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job", "CronJob"]
+  validate:
+    pattern:
+      spec:
+        containers:
+          - securityContext:
+              runAsNonRoot: true

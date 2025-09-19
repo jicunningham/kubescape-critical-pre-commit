@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ControlSet
+metadata:
+  name: "critical-only"
+  description: "Critical security controls for pre-commit"
+spec:
+  controls:
+    - restrict-privileged-containers
+    - disallow-host-path

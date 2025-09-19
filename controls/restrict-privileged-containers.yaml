@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Control
+metadata:
+  name: restrict-privileged-containers
+  description: Containers must not run as privileged
+  severity: critical
+spec:
+  match:
+    resources:
+      kinds: ["Pod", "Deployment", "StatefulSet", "DaemonSet"]
+  validate:
+    pattern:
+      spec:
+        containers:
+          - securityContext:
+              privileged: false
