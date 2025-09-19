@@ -1,5 +1,5 @@
 - id: kubescape-critical-check
   name: Kubescape Critical YAML Check
   entry: scripts/kubescape-nonroot-check.py
-  language: script
+  language: python
   files: \.(yaml|yml)$
