@@ -20,7 +20,7 @@ if [[ -z "$staged" ]]; then
 fi
 
 # Fetch the latest controls from your remote repo
-RULES_REPO_URL="https://github.com/jicunningham/kubescape-critical-controls"
+RULES_REPO_URL="https://github.com/jicunningham/kubescape-critical-pre-commit"
 RULES_LOCAL_DIR="/tmp/kubescape-critical-controls"
 rm -rf "$RULES_LOCAL_DIR"
 git clone --depth=1 "$RULES_REPO_URL" "$RULES_LOCAL_DIR"
