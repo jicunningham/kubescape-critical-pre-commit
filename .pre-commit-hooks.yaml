@@ -1,0 +1,5 @@
+- id: kubescape-critical-check
+  name: Kubescape Critical YAML Check
+  entry: ./kubescape-precommit.sh
+  language: script
+  files: \.(yaml|yml)$
