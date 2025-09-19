@@ -41,6 +41,7 @@ def run_kubescape(yaml_files):
                 "nsa",
                 "--severity-threshold",
                 "critical",
+                "--keep-local",
                 "-v",
                 tmpdir,
                 "--format",
