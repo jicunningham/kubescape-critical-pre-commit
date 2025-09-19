@@ -1,79 +1,81 @@
 #!/usr/bin/env python3
+import os
 import subprocess
 import sys
-import tempfile
-import os
-import json
 
-# Path to controls file in repo
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CONTROLS_FILE = os.path.join(SCRIPT_DIR, "../controls-index.yaml")
-
-if not os.path.isfile(CONTROLS_FILE):
-    print(f"Error: controls-index.yaml not found at {CONTROLS_FILE}", file=sys.stderr)
-    sys.exit(1)
-
-# Get staged YAML files
-try:
-    staged_files = subprocess.run(
-        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
-        capture_output=True, text=True, check=True
-    ).stdout.splitlines()
-except subprocess.CalledProcessError as e:
-    print(f"Error getting staged files: {e}", file=sys.stderr)
-    sys.exit(1)
-
-yaml_files = [f for f in staged_files if f.endswith((".yml", ".yaml"))]
-
-if not yaml_files:
-    print("No staged YAML files to scan with Kubescape.")
-    sys.exit(0)
-
-# Write staged content to temp files and scan
-critical_found = False
-for f in yaml_files:
+def get_staged_yaml_files():
+    """Return a list of staged YAML files."""
     try:
-        content = subprocess.run(
-            ["git", "show", f":{f}"],
-            capture_output=True, text=True, check=True
-        ).stdout
-    except subprocess.CalledProcessError as e:
-        print(f"Error reading staged content for {f}: {e}", file=sys.stderr)
-        continue
+        result = subprocess.run(
+            ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        files = [f.strip() for f in result.stdout.splitlines() if f.endswith((".yaml", ".yml"))]
+        return files
+    except subprocess.CalledProcessError:
+        return []
 
-    with tempfile.NamedTemporaryFile(mode="w+", suffix=".yaml", delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = tmp.name
+def main():
+    staged_files = get_staged_yaml_files()
+    if not staged_files:
+        print("No staged YAML files to scan with Kubescape.")
+        sys.exit(0)
+
+    # Kubescape controls path relative to this script
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    controls_index = os.path.join(script_dir, "../controls-index.yaml")
+
+    if not os.path.isfile(controls_index):
+        print(f"Error: controls-index.yaml not found at {controls_index}")
+        sys.exit(1)
+
+    # Run Kubescape
+    cmd = [
+        "kubescape",
+        "scan",
+        "--controls-config",
+        controls_index,
+        "--format",
+        "json",
+    ] + staged_files
 
     try:
-        out_json = subprocess.run(
-            ["kubescape", "scan", "--controls-config", CONTROLS_FILE, tmp_path,
-             "--format", "json", "--output", "-"],
-            capture_output=True, text=True, check=True
-        ).stdout
-    except subprocess.CalledProcessError as e:
-        # Kubescape returns non-zero if it finds issues; we still parse the JSON
-        out_json = e.stdout
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        print("Error: kubescape CLI not found. Install and ensure it is on PATH.")
+        sys.exit(1)
 
+    if not result.stdout.strip():
+        print("Kubescape did not produce any output.")
+        sys.exit(1)
+
+    # Parse results
+    import json
     try:
-        results = json.loads(out_json)
+        data = json.loads(result.stdout)
     except json.JSONDecodeError:
-        print(f"Error parsing Kubescape JSON for {f}", file=sys.stderr)
-        os.unlink(tmp_path)
-        continue
+        print("Error: Kubescape output is not valid JSON:")
+        print(result.stdout)
+        sys.exit(1)
 
-    # Check for critical findings (C-0057)
-    for r in results.get("resources", []):
-        for res in r.get("results", []):
-            if res.get("controlID") == "C-0057" and res.get("severity") == "critical":
-                print(f"❌ {f}: {res.get('message')}")
-                critical_found = True
+    # Count critical findings
+    critical_findings = [
+        r for r in data.get("resources", [])
+        if any(res.get("severity") == "critical" for res in r.get("results", []))
+    ]
 
-    os.unlink(tmp_path)
+    if critical_findings:
+        print(f"❌ Kubescape found {len(critical_findings)} critical issues in staged YAML files!")
+        for r in critical_findings:
+            for res in r.get("results", []):
+                if res.get("severity") == "critical":
+                    print(f"{r.get('name')}: {res.get('message')}")
+        sys.exit(1)
+    else:
+        print("✅ Kubescape check passed: no critical issues in staged YAML files.")
+        sys.exit(0)
 
-if critical_found:
-    print("\nCommit rejected due to critical Kubescape findings.")
-    sys.exit(1)
-else:
-    print("✅ Kubescape check passed: no critical issues in staged YAML files.")
-    sys.exit(0)
+if __name__ == "__main__":
+    main()
