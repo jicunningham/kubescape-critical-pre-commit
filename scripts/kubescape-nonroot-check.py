@@ -37,8 +37,11 @@ def run_kubescape(yaml_files):
             [
                 "kubescape",
                 "scan",
-                "--controls",
-                "C-0057",  # Containers should not run as root
+                "framework",
+                "nsa",
+                "--severity-threshold",
+                "critical",
+                "-v",
                 tmpdir,
                 "--format",
                 "json",
