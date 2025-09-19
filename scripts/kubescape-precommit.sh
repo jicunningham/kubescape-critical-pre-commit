@@ -26,7 +26,7 @@ rm -rf "$RULES_LOCAL_DIR"
 git clone --depth=1 "$RULES_REPO_URL" "$RULES_LOCAL_DIR"
 
 # Run Kubescape scan on staged YAML files with custom controls
-kubescape scan framework "$RULES_LOCAL_DIR/controls-index.yaml" $staged --output json > /tmp/kubescape-out.json
+kubescape scan "$RULES_LOCAL_DIR/controls-index.yaml" $staged --output json > /tmp/kubescape-out.json
 
 # Check for critical issues in the output
 critical_findings=$(jq '[ .resources[] | select(.results[]?.severity=="critical") ] | length' /tmp/kubescape-out.json)
